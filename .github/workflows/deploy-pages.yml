@@ -1,0 +1,77 @@
+name: Deploy Signed Zypper Repo to GitHub Pages
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Verify GPG Signature & Deploy Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download latest Release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+        run: |
+          mkdir -p /tmp/release-download _site
+          if [ -n "$RELEASE_TAG" ]; then
+            gh release download "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              --pattern "opensuse-repo-bundle.tar.gz*" \
+              --dir /tmp/release-download
+          else
+            gh release download \
+              --repo "${{ github.repository }}" \
+              --pattern "opensuse-repo-bundle.tar.gz*" \
+              --dir /tmp/release-download
+          fi
+          cd /tmp/release-download
+          sha256sum -c opensuse-repo-bundle.tar.gz.sha256
+          tar -xzf opensuse-repo-bundle.tar.gz -C "$GITHUB_WORKSPACE/_site"
+
+      - name: Verify repository GPG signature & optional pinned fingerprint
+        env:
+          EXPECTED_FPR: ${{ vars.FLEET_GPG_FINGERPRINT }}
+        run: |
+          GNUPGHOME="$(mktemp -d)"
+          chmod 0700 "$GNUPGHOME"
+          export GNUPGHOME
+          gpg --batch --import _site/RPM-GPG-KEY-damusa-workstation
+          ACTUAL_FPR="$(gpg --batch --list-keys --with-colons | awk -F: '$1 == "pub" { want=1; next } want && $1 == "fpr" { print $10; exit }')"
+          echo "Imported Fleet GPG key fingerprint: ${ACTUAL_FPR}"
+          if [ -n "$EXPECTED_FPR" ]; then
+            CLEAN_EXPECTED="$(printf '%s' "$EXPECTED_FPR" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+            if [ "$ACTUAL_FPR" != "$CLEAN_EXPECTED" ]; then
+              echo "ERROR: GPG key fingerprint mismatch (expected ${CLEAN_EXPECTED}, got ${ACTUAL_FPR})" >&2
+              exit 1
+            fi
+          fi
+          gpg --batch --verify _site/repodata/repomd.xml.asc _site/repodata/repomd.xml
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
