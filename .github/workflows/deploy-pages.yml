@@ -52,7 +52,7 @@ jobs:
           GNUPGHOME="$(mktemp -d)"
           chmod 0700 "$GNUPGHOME"
           export GNUPGHOME
-          gpg --batch --import _site/RPM-GPG-KEY-damusa-workstation
+          gpg --batch --import _site/RPM-GPG-KEY-damusa-repo
           ACTUAL_FPR="$(gpg --batch --list-keys --with-colons | awk -F: '$1 == "pub" { want=1; next } want && $1 == "fpr" { print $10; exit }')"
           echo "Imported Fleet GPG key fingerprint: ${ACTUAL_FPR}"
           if [ -n "$EXPECTED_FPR" ]; then
